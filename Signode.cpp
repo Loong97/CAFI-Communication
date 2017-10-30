@@ -16,7 +16,7 @@ void Signode::SwitchToWriteMode(int target){
 void Signode::SendOrder(int target,int source,int type,int value){
     SwitchToWriteMode(target);
     int data = source * TYPE_MAX + type * VALUE_MAX + value;
-    int tries = 100; 
+    int tries = MAX_TRIES; 
     while(tries>0){
         if(radio.write(&data,sizeof(int))) break;
         tries -= 1;

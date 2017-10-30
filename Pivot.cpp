@@ -29,7 +29,7 @@ void Pivot::Standby(){
         int type = serialData.substring(index_1+1,index_2).toInt();
         int value = serialData.substring(index_2+1).toInt();
         if(target<0||target>car_count) return;
-        if(type<PIV_ORDER_BRAKE||type>PIV_ORDER_ROTAT) return;
+        if(type<PIV_ORDER_BRAKE||type>PIV_ORDER_CLBRT) return;
         if(value<=0||value>=VALUE_MAX) return;
         else SendOrder(target,PIV_PPID,type,value);
         Serial.print("Send order ");
