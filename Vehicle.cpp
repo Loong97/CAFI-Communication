@@ -7,15 +7,13 @@ Vehicle::Vehicle(uint8_t c,uint8_t s,int lg,int lb,int rg,int rb):Signode(c,s){
     right_motor_back = rb;
 
     left_speed_go = SPEED_INIT;
-    left_speed_back = SPEED_INIT;
     right_speed_go = SPEED_INIT;
-    right_speed_back = SPEED_INIT;
 
-    centim_millis_go = 30;
-    centim_millis_back = 30;
-    sector_millis_left = 30;
-    sector_millis_right = 30;
+    centim_millis_go = CMMSG_INIT;
+    sector_millis_left = STMSG_INIT;
+    sector_millis_right = STMSG_INIT;
 
+    position = POSTN_INIT;
     pipe = PIV_PPID;
 }
 
@@ -24,6 +22,8 @@ void Vehicle::Setup(){
     pinMode(left_motor_back,OUTPUT);
     pinMode(right_motor_go,OUTPUT);
     pinMode(right_motor_back,OUTPUT);
+    digitalWrite(left_motor_back,LOW);
+    digitalWrite(right_motor_back,LOW);
     Brake();
     pinMode(KEY_PIN,INPUT);
     pinMode(BEEP_PIN,OUTPUT);
@@ -59,212 +59,33 @@ void Vehicle::Standby(){
     switch(type){
         case PIV_ORDER_BRAKE: Brake(); break;
         case PIV_ORDER_FORWD: Go_forward(value,SOLO); break;
-        case PIV_ORDER_BACK: Go_back(value,SOLO); break;
         case PIV_ORDER_ROTAT:
-            value %= CRCL_SECT;
-            if(value<CRCL_SECT/2) Go_left(value,SOLO);
-            else Go_right(CRCL_SECT-value,SOLO);
+            value %= 360;
+            if(value<180) Go_left(value,SOLO);
+            else Go_right(360-value,SOLO);
             break;
-        case PIV_ORDER_CLBRT:{
-            int tries = value % 100;
-            switch(value-tries){
-                case CLBRT_RLTIV_VALUE: Calibrate_relative(tries); break;
-                case CLBRT_STRAT_VALUE: Calibrate_straight(tries); break;
-                case CLBRT_ROTAT_VALUE: Calibrate_rotate(tries); break;
+        case PIV_ORDER_TRACK:
+            switch(value){
+                case TRACK_THIN_VALUE: Tracking_thin(); break;
+                case TRACK_CRUDE_VALUE: Tracking_crude(); break;
                 default: break;
-            }
-            break;
-        }
-        default:
-            break;
+            } break;
+        case PIV_ORDER_CLBRT:
+            switch(value){
+                case CLBRT_ROTAT_VALUE: Calibrate_rotation(); break;
+                case CLBRT_RLTIV_VALUE: Calibrate_relative(); break;
+                case CLBRT_POSTN_VALUE: Calibrate_position(); break;
+                case CLBRT_STRAT_VALUE: Calibrate_straight(); break;
+                default: break;
+            } break;
+        default: break;
     }
 }
 
-void Vehicle::Brake(){
-    digitalWrite(left_motor_go,LOW);
-    digitalWrite(left_motor_back,LOW);
-    digitalWrite(right_motor_go,LOW);
-    digitalWrite(right_motor_back,LOW);
-}
-
-void Vehicle::Start_forward(int left_speed,int right_speed){
-    analogWrite(left_motor_go,left_speed);
-    analogWrite(left_motor_back,0);
-    analogWrite(right_motor_go,right_speed);
-    analogWrite(right_motor_back,0);
-}
-
-void Vehicle::Start_forward(){
-    Start_forward(left_speed_go,right_speed_go);
-}
-
-void Vehicle::Start_back(int left_speed,int right_speed){
-    analogWrite(left_motor_go,0);
-    analogWrite(left_motor_back,left_speed);
-    analogWrite(right_motor_go,0);
-    analogWrite(right_motor_back,right_speed);
-}
-
-void Vehicle::Start_back(){
-    Start_back(left_speed_back,right_speed_back);
-}
-
-void Vehicle::Start_left(int right_speed){
-    analogWrite(left_motor_go,0);
-    analogWrite(left_motor_back,0);
-    analogWrite(right_motor_go,right_speed);
-    analogWrite(right_motor_back,0);
-}
-
-void Vehicle::Start_left(){
-    Start_left(right_speed_go);
-}
-
-void Vehicle::Start_right(int left_speed){
-    analogWrite(left_motor_go,left_speed);
-    analogWrite(left_motor_back,0);
-    analogWrite(right_motor_go,0);
-    analogWrite(right_motor_back,0);
-}
-
-void Vehicle::Start_right(){
-    Start_right(left_speed_go);
-}
-
-void Vehicle::Skew(bool go,bool side,int amount){
-    Brake();
-    if(go){
-        if(side==RIGHT) Go_right(1,SOLO);
-        else Go_left(1,SOLO);
-    }
-    else{
-        Go_forward(3,SOLO);
-        if(side==RIGHT) Go_left(1,SOLO);
-        else Go_right(1,SOLO);
-    }
-    int& left_speed = go==GO ? left_speed_go : left_speed_back;
-    int& right_speed = go==GO ? right_speed_go : right_speed_back;
-    if(side==RIGHT){
-        left_speed += amount;
-    }
-    else if(side==LEFT){
-        right_speed += amount;
-    }
-    if(left_speed>SPEED_INIT && right_speed>SPEED_INIT){
-        int difference = left_speed < right_speed ? left_speed - SPEED_INIT : right_speed - SPEED_INIT;
-        left_speed -= difference;
-        right_speed -= difference;
-    }
-    delay(CALI_DELAY);
-    if(go) Start_forward();
-    else Start_back();
-}
-
-bool Vehicle::Calibrate_relative_process(bool go){
-    Alarm(500);
-    bool unchanged = true;
-    while(Tracker()!=WHITE_WHITE){
-        switch(Tracker()){
-            case BLACK_WHITE:
-                Skew(go,LEFT,CALI_AMOUNT);
-                unchanged = false;
-                break;
-            case WHITE_BLACK:
-                Skew(go,RIGHT,CALI_AMOUNT);
-                unchanged = false;
-                break;
-            default: break;
-        }
-    }
-    Brake();
-    return unchanged;
-}
-
-bool Vehicle::Calibrate_relative(int tries){
-    bool go_done = false;
-    bool back_done = false;
-    for(; tries >= 1; tries -= 1){
-        Start_forward();
-        if(!WaitFor(Tracker,BLACK_BLACK,CALI_WTTM_STRT)){Brake(); return false;}
-        go_done = Calibrate_relative_process(GO);
-        
-        Start_back();
-        if(!WaitFor(Tracker,BLACK_BLACK,CALI_WTTM_STRT)){Brake(); return false;}
-        back_done = Calibrate_relative_process(BACK);
-
-        if(go_done && back_done) return true;
-    }
-    return false;
-}
-
-bool Vehicle::Calibrate_straight(int tries){
-    for(; tries >= 1; tries -= 1){
-        int waittime = 0;
-
-        Start_forward();
-        if(!WaitFor(Tracker,BLACK_BLACK,CALI_WTTM_STRT)){Brake(); return false;}
-        if(!WaitFor(Tracker,WHITE_WHITE,0,waittime)){Brake(); return false;}
-        Brake();
-        centim_millis_go = waittime / CALI_CTMT;
-
-        Start_back();
-        if(!WaitFor(Tracker,BLACK_BLACK,CALI_WTTM_STRT)){Brake(); return false;}
-        if(!WaitFor(Tracker,WHITE_WHITE,0,waittime)){Brake(); return false;}
-        Brake();
-        centim_millis_back = waittime / CALI_CTMT;
-    }
-    return true;
-}
-
-bool Vehicle::Calibrate_rotate(int tries){
-    for(; tries >= 1; tries -= 1){
-        int waittime = 0;
-        int circle_time = 0;
-        Start_forward();
-        if(!WaitFor(Tracker,BLACK_BLACK,CALI_WTTM_STRT)){Brake(); return false;}
-        Go_forward(5,SOLO);
-
-        Start_left();
-        if(!WaitFor(Tracker,WHITE_BLACK,0,waittime)){Brake(); return false;}
-        delay(CALI_WTTM_ROTT);
-        if(!WaitFor(Tracker,WHITE_BLACK,0,circle_time)){Brake(); return false;}
-        circle_time += CALI_WTTM_ROTT;
-        sector_millis_left = circle_time / CRCL_SECT;
-        delay(circle_time-waittime); Brake();
-
-        Start_right();
-        if(!WaitFor(Tracker,BLACK_WHITE,0,waittime)){Brake(); return false;}
-        delay(CALI_WTTM_ROTT);
-        if(!WaitFor(Tracker,BLACK_WHITE,0,circle_time)){Brake(); return false;}
-        circle_time += CALI_WTTM_ROTT;
-        sector_millis_right = circle_time / CRCL_SECT;
-        delay(circle_time-waittime); Brake();
-    }
-    return true;
-}
-
-void Vehicle::Go_forward(int centimeters,bool continuous){
-    Start_forward();
-    delay(centimeters * centim_millis_go);
-    if(continuous==SOLO) Brake();
-}
-
-void Vehicle::Go_back(int centimeters,bool continuous){
-    Start_back();
-    delay(centimeters * centim_millis_back);
-    if(continuous==SOLO) Brake();
-}
-
-void Vehicle::Go_left(int sectors,bool continuous){
-    Start_left();
-    delay(sectors * sector_millis_left);
-    if(continuous==SOLO) Brake();
-}
-
-void Vehicle::Go_right(int sectors,bool continuous){
-    Start_right();
-    delay(sectors * sector_millis_right);
-    if(continuous==SOLO) Brake();
+void Vehicle::Alarm(unsigned long milliseconds){
+    digitalWrite(BEEP_PIN,HIGH);
+    delay(milliseconds);
+    digitalWrite(BEEP_PIN,LOW);
 }
 
 int Vehicle::Tracker(){
@@ -273,8 +94,238 @@ int Vehicle::Tracker(){
     return left + right * 2;
 }
 
-void Vehicle::Alarm(int milliseconds){
-    digitalWrite(BEEP_PIN,HIGH);
-    delay(milliseconds);
-    digitalWrite(BEEP_PIN,LOW);
+void Vehicle::Brake(){
+    digitalWrite(left_motor_go,LOW);
+    digitalWrite(right_motor_go,LOW);
+}
+
+void Vehicle::Start_forward(int left_speed,int right_speed){
+    analogWrite(left_motor_go,left_speed);
+    analogWrite(right_motor_go,right_speed);
+}
+
+void Vehicle::Start_forward(bool accelerate){
+    int left_speed = accelerate==SLOW ? left_speed_go/2 : (left_speed_go+SPEED_MAX)*2;
+    int right_speed = accelerate==SLOW ? right_speed_go/2 : (right_speed_go+SPEED_MAX)*2;
+    Start_forward(left_speed,right_speed);
+}
+
+void Vehicle::Start_forward(){
+    Start_forward(left_speed_go,right_speed_go);
+}
+
+void Vehicle::Start_left(int right_speed){
+    analogWrite(left_motor_go,0);
+    analogWrite(right_motor_go,right_speed);
+}
+
+void Vehicle::Start_left(){
+    Start_left(right_speed_go);
+}
+
+void Vehicle::Start_right(int left_speed){
+    analogWrite(left_motor_go,left_speed);
+    analogWrite(right_motor_go,0);
+}
+
+void Vehicle::Start_right(){
+    Start_right(left_speed_go);
+}
+
+void Vehicle::Tracking_thin(){
+    //从轨道上正位开始
+    while(Tracker()!=BLACK_BLACK){
+        switch(Tracker()){
+            case WHITE_WHITE: Start_forward(); break;
+            case BLACK_WHITE: Start_left(); break;
+            case WHITE_BLACK: Start_right(); break;
+            default: break;
+        }
+    }
+    Brake();
+}
+
+void Vehicle::Tracking_crude(){
+    //从轨道上正位开始
+    while(Tracker()!=WHITE_WHITE){
+        switch(Tracker()){
+            case BLACK_BLACK: Start_forward(); break;
+            case BLACK_WHITE: Start_left(); break;
+            case WHITE_BLACK: Start_right(); break;
+            default: break;
+        }
+    }
+    Brake();
+}
+
+bool Vehicle::Calibrate_rotation(){
+    unsigned long wait_time = 0;
+    unsigned long semi_time_1 = 0;
+    unsigned long semi_time_2 = 0;
+    unsigned long circle_time = 0;
+    //从轨道上正位开始
+    if(Tracker()!=WHITE_WHITE){return false;}
+
+    Start_left();
+    if(!WaitFor(Tracker,WHITE_BLACK,0,wait_time)){Brake(); return false;}
+    delay(CALI_WTTM);
+    if(!WaitFor(Tracker,WHITE_BLACK,0,semi_time_1)){Brake(); return false;}
+    delay(CALI_WTTM);
+    if(!WaitFor(Tracker,WHITE_BLACK,0,semi_time_2)){Brake(); return false;}
+    circle_time = semi_time_1 + semi_time_2 + CALI_WTTM + CALI_WTTM;
+    sector_millis_left = circle_time / CRCL_SECT;
+    delay(circle_time-wait_time-BRAKE_TIME); Brake();
+
+    delay(CALI_WTTM);
+
+    Start_right();
+    if(!WaitFor(Tracker,BLACK_WHITE,0,wait_time)){Brake(); return false;}
+    delay(CALI_WTTM);
+    if(!WaitFor(Tracker,BLACK_WHITE,0,semi_time_1)){Brake(); return false;}
+    delay(CALI_WTTM);
+    if(!WaitFor(Tracker,BLACK_WHITE,0,semi_time_2)){Brake(); return false;}
+    circle_time = semi_time_1 + semi_time_2 + CALI_WTTM + CALI_WTTM;
+    sector_millis_right = circle_time / CRCL_SECT;
+    delay(circle_time-wait_time-BRAKE_TIME); Brake();
+    Alarm(500);
+    return true;
+}
+
+void Vehicle::Calibrate_relative(){
+    unsigned long forward_time = 0;
+    unsigned long left_time = 0;
+    unsigned long right_time = 0;
+    unsigned long last_time = millis();
+    left_speed_go = SPEED_INIT;
+    right_speed_go = SPEED_INIT;
+    //从轨道上正位开始
+    int last_tracker = WHITE_WHITE;
+    Start_forward();
+    while(Tracker()!=BLACK_BLACK){
+        if(Tracker()==last_tracker) continue;
+        switch(last_tracker){
+            case WHITE_WHITE: forward_time += millis()-last_time; break;
+            case BLACK_WHITE: left_time += millis()-last_time; break;
+            case WHITE_BLACK: right_time += millis()-last_time; break;
+            default: break;
+        }
+        last_time = millis();
+        last_tracker = Tracker();
+        switch(Tracker()){
+            case WHITE_WHITE: Start_forward(); break;
+            case BLACK_WHITE: Start_left(); break;
+            case WHITE_BLACK: Start_right(); break;
+            default: break;
+        }
+    }
+    while(Tracker()!=WHITE_WHITE){}
+    Brake();
+    unsigned long left_motor_time = forward_time + right_time;
+    unsigned long right_motor_time = forward_time + left_time;
+    //涉及到int和unsigned long之间的转换
+    left_speed_go = SPEED_INIT * left_motor_time / (left_motor_time + right_motor_time) * 2;
+    right_speed_go = SPEED_INIT * right_motor_time / (left_motor_time + right_motor_time) * 2;
+    Alarm(500);
+}
+
+void Vehicle::Calibrate_position(){
+    position = -1;
+    //从白色区域开始
+    Start_forward();
+    while(Tracker()!=BLACK_BLACK){}
+    Brake();
+    unsigned long start_time = millis();
+    while(millis()-start_time<=2000){
+        switch(Tracker()){
+            case BLACK_BLACK: Start_forward(); break;
+            case BLACK_WHITE: Start_left(); break;
+            case WHITE_BLACK: Start_right(); break;
+            default: break;
+        }
+    }
+    unsigned long last_time = millis();
+    int last_tracker = BLACK_BLACK;
+    int this_tracker = BLACK_BLACK;
+    int normal_tracker = BLACK_BLACK;
+    while(millis()-start_time<=20000){
+        this_tracker = Tracker();
+        if(this_tracker!=WHITE_WHITE && this_tracker!=BLACK_BLACK && this_tracker!=last_tracker){
+            last_time = millis();
+            last_tracker = this_tracker;
+        }
+        switch(this_tracker){
+            case BLACK_BLACK: Start_forward(); break;
+            case BLACK_WHITE: Start_left(); break;
+            case WHITE_BLACK: Start_right(); break;
+            default: break;
+        }
+        if(millis()-last_time>=2000){
+            break;
+        }
+    }
+    normal_tracker = last_tracker;    
+    while(Tracker()!=3-normal_tracker && Tracker()!=WHITE_WHITE){
+        switch(Tracker()){
+            case BLACK_BLACK: Start_forward(); break;
+            case BLACK_WHITE: Start_left(); break;
+            case WHITE_BLACK: Start_right(); break;
+            default: break;
+        }
+    }
+    switch(normal_tracker){
+        case BLACK_WHITE: Go_left(120,SOLO); break;
+        case WHITE_BLACK: Go_right(120,SOLO); break;
+        default: break;
+    }
+    // Tracking_crude();
+    // Start_forward();
+    // while(Tracker()==WHITE_WHITE){}
+    // last_tracker = WHITE_WHITE;
+    // while(Tracker()!=BLACK_BLACK){
+    //     if(Tracker()==last_tracker) continue;
+    //     last_tracker = Tracker();
+    //     switch(last_tracker){
+    //         case BLACK_WHITE: position+=1; break;
+    //         case WHITE_BLACK: position+=POSTN_GROUP; break;
+    //         case WHITE_WHITE: break;
+    //         default: break;
+    //     }
+    // }
+    // while(Tracker()==BLACK_BLACK){}
+    // Brake();
+    Alarm(500);
+}
+
+void Vehicle::Calibrate_straight(){
+    unsigned long go_time = 0;
+    //从白色区域开始
+    Start_forward();
+    while(Tracker()!=BLACK_BLACK){}
+    go_time = millis();
+    while(Tracker()!=WHITE_WHITE){}
+    Tracking_thin();
+    go_time = millis() - go_time;
+    centim_millis_go = go_time / CALI_CTMT;
+    Alarm(500);
+}
+
+void Vehicle::Go_forward(int centimeters,bool continuous){
+    unsigned long delay_time = centimeters * centim_millis_go;
+    Start_forward();
+    delay(delay_time);
+    if(continuous==SOLO) Brake();
+}
+
+void Vehicle::Go_left(int degrees,bool continuous){
+    unsigned long delay_time = degrees * sector_millis_left / (360/CRCL_SECT);
+    Start_left();
+    delay(delay_time);
+    if(continuous==SOLO) Brake();
+}
+
+void Vehicle::Go_right(int degrees,bool continuous){
+    unsigned long delay_time = degrees * sector_millis_right / (360/CRCL_SECT);
+    Start_right();
+    delay(delay_time);
+    if(continuous==SOLO) Brake();
 }
